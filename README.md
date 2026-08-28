@@ -1,66 +1,79 @@
-# RAG System
+# rag-eval-gate
 
-Production-ready Retrieval-Augmented Generation platform built incrementally.
+A RAG serving stack whose CI **blocks merges on measured answer quality**, not
+just on tests passing.
 
-## Tech Stack
+Every pull request runs the retrieval pipeline over an evaluation set and fails
+if any of three metrics regresses below its floor:
 
-| Component | Technology |
-|-----------|-----------|
-| Language | Python 3.12 |
-| API Framework | FastAPI |
-| Database | PostgreSQL 16 + pgvector |
-| Cache | Redis 7 |
-| Object Storage | MinIO (S3-compatible) |
-| LLM / Embeddings | OpenAI API (provider-abstracted) |
-| Containerization | Docker Compose |
-
-## Project Structure
-
+```yaml
+- name: Run evaluation
+  run: |
+    python -m eval.run_eval \
+      --dataset eval/datasets/sample.json \
+      --judge heuristic \
+      --min-context-relevance 0.3 \
+      --min-groundedness     0.3 \
+      --min-answer-relevance 0.3
 ```
-rag/
-├── apps/
-│   ├── api/                 # FastAPI application + Dockerfile
-│   │   ├── main.py          # App factory, lifespan, CORS
-│   │   ├── schemas.py       # Pydantic request/response models
-│   │   ├── dependencies.py  # FastAPI DI (db, providers)
-│   │   ├── Dockerfile
-│   │   └── routes/
-│   │       ├── health.py    # GET /health
-│   │       ├── ingest.py    # CRUD /api/v1/documents/
-│   │       └── query.py     # POST /api/v1/query/
-│   └── worker/              # Background ingestion worker + Dockerfile
-│       └── main.py          # Polling loop for pending documents
-├── libs/
-│   ├── core/                # Shared foundation
-│   │   ├── settings.py      # Pydantic-settings (env-driven config)
-│   │   ├── database.py      # AsyncSession factory (SQLAlchemy)
-│   │   ├── models.py        # Document + Chunk ORM with pgvector
-│   │   ├── cache.py         # Redis client factory
-│   │   ├── storage.py       # MinIO client factory
-│   │   ├── logging.py       # Structured logging (text/JSON)
-│   │   └── providers/       # LLM + Embedding abstractions
-│   │       ├── base.py      # Protocol definitions
-│   │       ├── openai_provider.py
-│   │       └── factory.py   # Provider factory
-│   ├── ingestion/           # Document processing pipeline
-│   │   ├── extractor.py     # Text extraction (.txt, .md)
-│   │   ├── chunker.py       # Recursive character splitter
-│   │   ├── pipeline.py      # Sync ingestion (API-driven)
-│   │   └── worker_tasks.py  # Async ingestion (worker-driven)
-│   └── retrieval/           # Search + RAG generation
-│       ├── search.py        # Vector similarity (pgvector cosine)
-│       └── generator.py     # Context assembly + LLM answer
-├── infra/
-│   └── init.sql             # DB schema: documents, chunks, pgvector
-├── alembic/                 # Database migrations
-├── tests/                   # Unit + integration tests
-├── docker-compose.yml       # All services: postgres, redis, minio, api, worker
-├── Makefile                 # Task runner (Linux/Mac)
-├── tasks.ps1               # Task runner (Windows PowerShell)
-├── requirements.txt
-├── pyproject.toml           # ruff, pytest, mypy config
-└── .env.example
-```
+
+The three metrics are implemented in this repo (`libs/ragops/metrics/`), not
+pulled from a framework:
+
+| Metric | Question it answers | Source |
+|---|---|---|
+| Context relevance | Did retrieval fetch passages that bear on the question? | `context_relevance.py` |
+| Groundedness | Is every claim in the answer supported by those passages? | `groundedness.py` |
+| Answer relevance | Does the answer actually address what was asked? | `answer_relevance.py` |
+
+## Why this is not a tutorial RAG
+
+The common shape is: chunk a PDF, embed it, do a similarity search, stuff the
+top-k into a prompt. This repo differs on four axes.
+
+**Retrieval is hybrid, not vector-only.** `libs/retrieval/` combines dense and
+lexical search (`lexical_search.py`) through rank fusion (`fusion.py`), then
+reorders with `rerankers.py`. Query rewriting lives in `transforms/`. There is
+also a graph-based path in `libs/graph_rag/`.
+
+**Untrusted input is treated as untrusted.** `libs/guardrails/` is a pipeline of
+eight modules covering prompt injection (`injection.py`), PII (`pii.py`), output
+filtering (`output.py`), sanitisation, and a trust model (`trust.py`) — applied
+to both user input and retrieved documents, since retrieved text is attacker
+-controllable in any RAG system.
+
+**Ingestion is a worker, not a request handler.** `apps/api/` and `apps/worker/`
+are separate processes; parsing and chunking happen off the request path.
+Schema changes go through Alembic migrations in `alembic/`.
+
+**Providers are swappable.** LLM and embedding backends are selected by env var
+(`LLM_PROVIDER`, `EMBEDDING_PROVIDER`) behind an interface in
+`libs/core/providers/`, so OpenAI is a default rather than a dependency.
+
+## Scale
+
+| | |
+|---|---|
+| Python | ~25,800 lines across 144 files |
+| Tests | 637 passing across 17 modules |
+| Library modules | 9 (`agent`, `auth`, `core`, `embedding`, `graph_rag`, `guardrails`, `ingestion`, `ragops`, `retrieval`) |
+| Storage | PostgreSQL 16 + pgvector, Redis 7, MinIO |
+| Runtime | FastAPI, Python 3.12, Docker Compose |
+
+## Honest limits
+
+- The CI judge is heuristic, not an LLM judge — deterministic and API-free so
+  CI can gate on it, but a weaker signal than an LLM judge. It scores query/
+  context term coverage with prefix-and-stem matching; it does not understand
+  meaning. The thresholds (0.3) are regression floors, not quality targets.
+- Context relevance is scored against context supplied by the dataset, so the
+  gate measures the *judge and generator* path end to end but does not exercise
+  a live index. Wiring the gate to real retrieval needs Postgres + pgvector as
+  a CI service.
+- `eval/datasets/sample.json` is a small seed set. Growing it is the main lever
+  for making the gate meaningful.
+- Extracted from a larger personal workspace, so early history is compressed
+  into a handful of bulk commits.
 
 ## Quick Start
 

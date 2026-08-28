@@ -1,0 +1,48 @@
+name: Eval Gate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: pip
+        cache-dependency-path: requirements.txt
+    - run: pip install -r requirements.txt
+    - run: python -m pytest tests/ -q
+
+  eval:
+    name: Eval Gate
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: pip
+        cache-dependency-path: requirements.txt
+    - run: pip install -r requirements.txt
+    - name: Run evaluation
+      run: |
+        python -m eval.run_eval \
+          --dataset eval/datasets/sample.json \
+          --output eval/reports \
+          --judge heuristic \
+          --min-context-relevance 0.3 \
+          --min-groundedness 0.3 \
+          --min-answer-relevance 0.3
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: eval-reports
+        path: eval/reports/
+        retention-days: 30

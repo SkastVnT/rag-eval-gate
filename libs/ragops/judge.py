@@ -136,6 +136,64 @@ class HeuristicJudge:
     - Context overlap (word-level)
     """
 
+    _STOPWORDS = frozenset(
+        "a an the is are was were do does did what which who whom whose when "
+        "where why how of to in on for with and or if it its this that by "
+        "used use".split()
+    )
+
+    @staticmethod
+    def _terms(text: str) -> set[str]:
+        """Split on non-alphanumerics so CHUNK_SIZE=512 yields {chunk, size}."""
+        out: set[str] = set()
+        for w in re.split(r"[^a-z0-9]+", text.lower()):
+            if len(w) < 3 or w in HeuristicJudge._STOPWORDS:
+                continue
+            for suf in ("ing", "ed", "es", "s"):
+                if len(w) > len(suf) + 2 and w.endswith(suf):
+                    w = w[: -len(suf)]
+                    break
+            out.add(w)
+        return out
+
+    def _score_retrieval(self, query: str, context: str) -> JudgeResult:
+        """Score how well the context covers the query (no answer involved).
+
+        Crude on purpose: deterministic and API-free so CI can gate on it.
+        Matching is stem- and prefix-based because exact token equality scored
+        relevant context as irrelevant -- a query for "chunk size" must match a
+        context that says "chunking" and "CHUNK_SIZE=512".
+        """
+        q_terms = self._terms(query)
+        if not q_terms:
+            return JudgeResult(score=0.0, reasoning="query has no content words")
+        c_terms = self._terms(context)
+
+        def covered(q: str) -> bool:
+            if q in c_terms:
+                return True
+            return any(
+                (c.startswith(q) or q.startswith(c)) and min(len(q), len(c)) >= 4
+                for c in c_terms
+            )
+
+        hit = {q for q in q_terms if covered(q)}
+        coverage = len(hit) / len(q_terms)
+        reasons = [f"query term coverage: {len(hit)}/{len(q_terms)}"]
+        score = 0.7 * coverage
+
+        n = len(context.split())
+        if 20 <= n <= 600:
+            score += 0.3
+            reasons.append(f"focused context ({n} words)")
+        elif n < 20:
+            reasons.append(f"context too thin ({n} words)")
+        else:
+            score += 0.15
+            reasons.append(f"context verbose ({n} words)")
+
+        return JudgeResult(score=round(min(1.0, score), 3), reasoning="; ".join(reasons))
+
     async def evaluate(self, prompt: str) -> JudgeResult:
         """Parse the prompt to extract components and score heuristically.
 
@@ -149,6 +207,12 @@ class HeuristicJudge:
 
         score = 0.0
         reasons: list[str] = []
+
+        # Retriever metrics (context relevance) supply Query + Context but no
+        # Answer. The answer heuristics below always scored those 0.0, which
+        # held the CI eval gate permanently red.
+        if not answer.strip() and query and context:
+            return self._score_retrieval(query, context)
 
         # 1. Non-empty answer
         if answer.strip():

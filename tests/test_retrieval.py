@@ -17,6 +17,8 @@ import pytest
 
 from libs.core.models import RetrievalTrace
 from libs.retrieval.search import SearchFilters, SearchResult
+from libs.auth.authorization import SensitivityPreFilter
+from libs.auth.context import AuthContext
 from libs.retrieval.service import (
     RetrievalRequest,
     RetrievalResponse,
@@ -473,13 +475,27 @@ class TestRetrieveEndpoint:
             db.commit = AsyncMock()
             yield db
 
+        _deps = __import__(
+            "apps.api.dependencies",
+            fromlist=[
+                "db_session",
+                "embedding_provider",
+                "llm_provider",
+                "auth_context",
+                "pre_filter_authz",
+            ],
+        )
+        # /retrieve gained auth_context + pre_filter_authz after this test was
+        # written; without overriding them FastAPI rejects the request with 422
+        # before the handler runs.
         app.dependency_overrides = {
-            __import__(
-                "apps.api.dependencies", fromlist=["db_session"]
-            ).db_session: fake_db,
-            __import__(
-                "apps.api.dependencies", fromlist=["embedding_provider"]
-            ).embedding_provider: lambda: fake_provider,
+            _deps.db_session: fake_db,
+            _deps.embedding_provider: lambda: fake_provider,
+            _deps.llm_provider: lambda: MagicMock(),
+            _deps.auth_context: lambda: AuthContext(
+                tenant_id=TENANT_ID, user_id=None, role="admin"
+            ),
+            _deps.pre_filter_authz: lambda: SensitivityPreFilter(),
         }
 
         with _patch(
@@ -533,13 +549,27 @@ class TestRetrieveEndpoint:
             db.commit = AsyncMock()
             yield db
 
+        _deps = __import__(
+            "apps.api.dependencies",
+            fromlist=[
+                "db_session",
+                "embedding_provider",
+                "llm_provider",
+                "auth_context",
+                "pre_filter_authz",
+            ],
+        )
+        # /retrieve gained auth_context + pre_filter_authz after this test was
+        # written; without overriding them FastAPI rejects the request with 422
+        # before the handler runs.
         app.dependency_overrides = {
-            __import__(
-                "apps.api.dependencies", fromlist=["db_session"]
-            ).db_session: fake_db,
-            __import__(
-                "apps.api.dependencies", fromlist=["embedding_provider"]
-            ).embedding_provider: lambda: fake_provider,
+            _deps.db_session: fake_db,
+            _deps.embedding_provider: lambda: fake_provider,
+            _deps.llm_provider: lambda: MagicMock(),
+            _deps.auth_context: lambda: AuthContext(
+                tenant_id=TENANT_ID, user_id=None, role="admin"
+            ),
+            _deps.pre_filter_authz: lambda: SensitivityPreFilter(),
         }
 
         with patch(

@@ -707,3 +707,68 @@ class TestEvalModels:
         )
         assert result.case_id == "c1"
         assert result.passed is True
+
+
+class TestHeuristicJudgeRetrievalScoring:
+    """Regression guard: retriever metrics carry no Answer section.
+
+    HeuristicJudge used to early-return 0.0 whenever the prompt had no
+    `Answer:` block. Context relevance prompts never have one, so the metric
+    was pinned at 0.0 and the CI eval gate could never pass.
+    """
+
+    @pytest.mark.asyncio
+    async def test_context_relevance_is_not_pinned_to_zero(self):
+        judge = HeuristicJudge()
+        result = await eval_context_relevance(
+            judge,
+            query="What is the default chunk size used by the ingestion pipeline?",
+            context=(
+                "The chunking configuration uses CHUNK_SIZE=512 tokens with an "
+                "overlap of CHUNK_OVERLAP=64 tokens. These defaults balance "
+                "context preservation against retrieval precision, and apply to "
+                "every document that passes through the ingestion worker."
+            ),
+        )
+        assert result.score > 0.0, result.reasoning
+
+    @pytest.mark.asyncio
+    async def test_relevant_context_outscores_irrelevant(self):
+        judge = HeuristicJudge()
+        query = "What is the capital of France?"
+        relevant = await eval_context_relevance(
+            judge,
+            query=query,
+            context=(
+                "Paris is the capital city of France and its largest urban "
+                "area. The French government and parliament both sit there, "
+                "which is why it is treated as the administrative capital."
+            ),
+        )
+        irrelevant = await eval_context_relevance(
+            judge,
+            query=query,
+            context=(
+                "The retrieval system uses HNSW indexes with m=16 and "
+                "ef_construction=64 for approximate nearest neighbour search. "
+                "The vector column stores 1536-dimensional embeddings."
+            ),
+        )
+        assert relevant.score > irrelevant.score, (
+            f"relevant={relevant.score} irrelevant={irrelevant.score}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_morphological_variants_still_match(self):
+        """Exact token equality scored "chunk size" against "chunking" as a miss."""
+        judge = HeuristicJudge()
+        result = await eval_context_relevance(
+            judge,
+            query="How does chunking work?",
+            context=(
+                "Documents are split into chunks of a configured size before "
+                "embedding. Each chunk overlaps its neighbour so that a "
+                "sentence spanning a boundary is not lost during retrieval."
+            ),
+        )
+        assert result.score >= 0.5, result.reasoning
