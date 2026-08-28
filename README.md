@@ -55,7 +55,7 @@ Schema changes go through Alembic migrations in `alembic/`.
 | | |
 |---|---|
 | Python | ~25,800 lines across 144 files |
-| Tests | 637 passing across 17 modules |
+| Tests | 640 passing across 17 modules |
 | Library modules | 9 (`agent`, `auth`, `core`, `embedding`, `graph_rag`, `guardrails`, `ingestion`, `ragops`, `retrieval`) |
 | Storage | PostgreSQL 16 + pgvector, Redis 7, MinIO |
 | Runtime | FastAPI, Python 3.12, Docker Compose |
